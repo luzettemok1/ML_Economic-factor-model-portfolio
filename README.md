@@ -1,4 +1,4 @@
-# ML_Economic-factor-model-portfolio
+# ML_Economic-factor-model-portfolio- Group H
 
 Module name:    Financial Analytics and Machine Learning
 Aim:  Build a macro trading strategy using OLS, Ridge, Lasso and Xgboost
