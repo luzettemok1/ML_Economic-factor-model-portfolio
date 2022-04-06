@@ -5,33 +5,14 @@ from datetime import datetime
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
-
 from sklearn.model_selection import TimeSeriesSplit
-
 from sklearn.linear_model import Lasso, Ridge, LinearRegression
 import xgboost as xgb
-
 from sklearn.metrics import mean_squared_error
-#pip install xgboost
-The aim of the project is to build a macro trading strategy using the
-methodologies learnt in the module. 
 
-Please consider a long-short
-strategy trading eight US sector ETFs: financials, energy, utilities,
+We use a long-short strategy trading eight US sector ETFs: financials, energy, utilities,
 industrials, technology, consumer staples, consumer discretionary
 and materials. 
-
-Please use 8 macro factors as explanatory variables:
-Oil, Gold, Dollar, US 10yr bond yield, US economic activity index
-(CFNAI), 10Y-2Y yield spread, IG and HY credit spread.
-For the ETFs you can use SPDR (Spider) ETFs available on
-Yahoo. 
-
-SPDR Sector ETFs have a long time series (1998).
-For macro data use Fred data base:
-https://fred.stlouisfed.org
-For US economic activity use the Chicago Fed National
-activity index available in Fred.
 
 Predict next day return based on previous day macro factor
 using OLS, Ridge, Lasso. The use of XGBoost is facultative.
@@ -43,18 +24,23 @@ Sharpe ratio (in sample, out of sample) and average monthly
 turnover for each of the strategies
 Explain the results obtained
 
-# load macro variables
-oil = pd.read_csv('/Users/luzemok/Desktop/data/oil.csv')
-gold = pd.read_csv('/Users/luzemok/Desktop/data/gold.csv')
-dollar = pd.read_csv('/Users/luzemok/Desktop/data/dollar.csv')
-us10yr_bond = pd.read_csv('/Users/luzemok/Desktop/data/us 10yr bond.csv')
-CFNAI = pd.read_csv('/Users/luzemok/Desktop/data/CFNAI.csv')
-T10Y2Y = pd.read_csv('/Users/luzemok/Desktop/data/T10Y2Y.csv')
-IG = pd.read_csv('/Users/luzemok/Desktop/data/IG.csv')
-HY = pd.read_csv('/Users/luzemok/Desktop/data/HY.csv')
+We use 8 macro factors as explanatory variables:
+Oil, Gold, Dollar, US 10yr bond yield, US economic activity index
+(CFNAI), 10Y-2Y yield spread, IG and HY credit spread. For US economic activity use the Chicago Fed National
+activity index available in Fred.
 
-# load SPDR sector ETFs
-sector = pd.read_csv('/Users/luzemok/Desktop/data/sector.csv')
+# load macro variables
+oil = pd.read_csv('/Users//Desktop/data/oil.csv')
+gold = pd.read_csv('/Users//Desktop/data/gold.csv')
+dollar = pd.read_csv('/Users//Desktop/data/dollar.csv')
+us10yr_bond = pd.read_csv('/Users//Desktop/data/us 10yr bond.csv')
+CFNAI = pd.read_csv('/Users//Desktop/data/CFNAI.csv')
+T10Y2Y = pd.read_csv('/Users//Desktop/data/T10Y2Y.csv')
+IG = pd.read_csv('/Users//Desktop/data/IG.csv')
+HY = pd.read_csv('/Users//Desktop/data/HY.csv')
+
+# load SPDR sector ETFs (Time series data from yahoo finance)
+sector = pd.read_csv('/Users//Desktop/data/sector.csv')
 # change CFNAI monthly data to daily data
 oil.index = pd.to_datetime(oil['Date'])
 oil.index = oil.index.strftime('%Y-%m')
