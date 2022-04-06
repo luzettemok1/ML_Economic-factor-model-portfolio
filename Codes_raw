@@ -1,0 +1,529 @@
+import numpy as np
+import pandas as pd
+from functools import reduce
+from datetime import datetime
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.model_selection import TimeSeriesSplit
+
+from sklearn.linear_model import Lasso, Ridge, LinearRegression
+import xgboost as xgb
+
+from sklearn.metrics import mean_squared_error
+#pip install xgboost
+The aim of the project is to build a macro trading strategy using the
+methodologies learnt in the module. 
+
+Please consider a long-short
+strategy trading eight US sector ETFs: financials, energy, utilities,
+industrials, technology, consumer staples, consumer discretionary
+and materials. 
+
+Please use 8 macro factors as explanatory variables:
+Oil, Gold, Dollar, US 10yr bond yield, US economic activity index
+(CFNAI), 10Y-2Y yield spread, IG and HY credit spread.
+For the ETFs you can use SPDR (Spider) ETFs available on
+Yahoo. 
+
+SPDR Sector ETFs have a long time series (1998).
+For macro data use Fred data base:
+https://fred.stlouisfed.org
+For US economic activity use the Chicago Fed National
+activity index available in Fred.
+
+Predict next day return based on previous day macro factor
+using OLS, Ridge, Lasso. The use of XGBoost is facultative.
+Rank by expected 
+
+Go long the top 3 and short the bottom 3
+Calculate annualised return (in sample, out of sample),
+Sharpe ratio (in sample, out of sample) and average monthly
+turnover for each of the strategies
+Explain the results obtained
+
+# load macro variables
+oil = pd.read_csv('/Users/luzemok/Desktop/data/oil.csv')
+gold = pd.read_csv('/Users/luzemok/Desktop/data/gold.csv')
+dollar = pd.read_csv('/Users/luzemok/Desktop/data/dollar.csv')
+us10yr_bond = pd.read_csv('/Users/luzemok/Desktop/data/us 10yr bond.csv')
+CFNAI = pd.read_csv('/Users/luzemok/Desktop/data/CFNAI.csv')
+T10Y2Y = pd.read_csv('/Users/luzemok/Desktop/data/T10Y2Y.csv')
+IG = pd.read_csv('/Users/luzemok/Desktop/data/IG.csv')
+HY = pd.read_csv('/Users/luzemok/Desktop/data/HY.csv')
+
+# load SPDR sector ETFs
+sector = pd.read_csv('/Users/luzemok/Desktop/data/sector.csv')
+# change CFNAI monthly data to daily data
+oil.index = pd.to_datetime(oil['Date'])
+oil.index = oil.index.strftime('%Y-%m')
+oil = oil.rename(columns={"Date": "a"})
+oil = oil.reset_index()
+
+CFNAI.index = pd.to_datetime(CFNAI['Date'])
+CFNAI.index = CFNAI.index.strftime('%Y-%m')
+CFNAI = CFNAI.drop(['Date'], axis=1)
+CFNAI = CFNAI.reset_index()
+
+oil_CFNAI = oil.merge(CFNAI, on='Date', how='left').dropna()
+oil_CFNAI = oil_CFNAI.drop(['Date'], axis=1)
+oil_CFNAI = oil_CFNAI.rename(columns={"a": "Date"})
+
+oil_CFNAI
+# merge all data together leaving dates that contain data for all variables
+df_group = [oil_CFNAI, gold, dollar, us10yr_bond, T10Y2Y, IG, HY]
+mv = reduce(lambda left, right: pd.merge(left, right, on=['Date']),df_group)
+mv
+sector.corr()
+import seaborn as sns
+fig, ax = plt.subplots(figsize=(15,10))
+g = sns.heatmap(corr, xticklabels=corr.columns, yticklabels= corr.columns, ax = ax)
+
+df = mv.merge(sector, on = 'Date')
+df
+# Extract sector ETF data from above df
+sector = df.iloc[:,9:]
+
+# name the columns in ret dataframe
+col = ['consumer_discretionary', 'consumer_staples', 'energy', 'financials', 'industrials', 'materials', 'technology', 'utilities']
+ret = pd.DataFrame(np.zeros((len(sector)-1,8)),columns = col)
+simpleret = pd.DataFrame(np.zeros((len(sector)-1,8)),columns = col)
+# calculate log returns
+for i in range(len(ret)):
+    ret.iloc[i,:] = np.array(np.log(sector.iloc[i+1,:]/sector.iloc[i,:]))
+    simpleret.iloc[i,:] = np.array((sector.iloc[i+1,:]-sector.iloc[i,:])/sector.iloc[i,:])
+# Insert date column
+d = np.array(df['Date'][1:])
+ret.insert(0, "Date",d)
+simpleret.insert(0, "Date",d)
+ret
+    
+    
+# needed data of macro variables, backfill
+mv = df.iloc[0:4066 , 0:9]
+mv=mv.apply(pd.to_numeric, errors='coerce')
+mv = mv.ffill()
+mv = mv.drop(['Date'], axis=1)
+ret = ret.drop(['Date'], axis=1)
+simpleret = simpleret.drop(['Date'], axis=1)
+ret = ret.astype(float)
+# separate data into training data and test data(out of sample data)
+
+a = int(np.floor(len(mv)*0.7))
+x_train = mv.iloc[:a, :]
+x_test = mv.iloc[a:, :]
+y_train = ret.iloc[:a, :]
+y_train_simple = simpleret.iloc[:a, :]
+y_test = ret.iloc[a:, :]
+y_test_simple = simpleret.iloc[a:, :]
+y_test_simple
+x_train
+y_train
+# Standardize features by removing the mean and scaling to unit variance
+scaler = StandardScaler()
+scaler.fit_transform(x_train)
+x_train_std = scaler.transform(x_train)
+x_test_std = scaler.transform(x_test)
+# OLS
+ols = LinearRegression()
+pred_ols = pd.DataFrame()
+ISpred_ols = pd.DataFrame()
+# loop over targets and time
+for i in list(col):
+        ols.fit(x_train_std, y_train[i])
+        pred_ols[i] = ols.predict(x_test_std)
+        ISpred_ols[i] = ols.predict(x_train_std)
+from sklearn import metrics
+print('OLS Mean Squared Error (MSE out sample) :', metrics.mean_squared_error(y_test, pred_ols))
+print('OLS Mean Squared Error (MSE in sample) :', metrics.mean_squared_error(y_train, ISpred_ols))
+# Ridge
+alpha_ridge = pd.DataFrame()
+n_jobs = -1
+ridge = Ridge()
+params_ridge = {'alpha':np.linspace(2000, 12000, 500)}
+tscv = TimeSeriesSplit(n_splits=5)
+gs_ridge = GridSearchCV(ridge, params_ridge,  refit=True, cv=tscv, n_jobs=n_jobs, scoring = 'neg_mean_squared_error', verbose=2)
+
+for i in col:
+    gs_ridge.fit(x_train_std, y_train[i])
+    n = gs_ridge.best_params_
+    alpha_ridge[i] = [n['alpha']]
+alpha_ridge
+pred_ridge = pd.DataFrame()
+ISpred_ridge = pd.DataFrame()
+for i in col:
+    ridge_best = Ridge(alpha=alpha_ridge[i])
+    ridge_best.fit(x_train_std, y_train[i])
+    pred_ridge[i] = ridge_best.predict(x_test_std)
+    ISpred_ridge[i] = ridge_best.predict(x_train_std)
+print('Ridge Mean Squared Error (MSE out sample) :', metrics.mean_squared_error(y_test, pred_ridge))
+print('Ridge Mean Squared Error (MSE in sample) :', metrics.mean_squared_error(y_train, ISpred_ridge))
+# Lasso
+alpha_lasso = pd.DataFrame()
+n_jobs = -1
+lasso = Lasso()
+params_lasso = {'alpha':np.linspace(0, 0.001, 100)}
+tscv = TimeSeriesSplit(n_splits=4)
+gs_lasso = GridSearchCV(lasso, params_lasso,  refit=True, cv=tscv, n_jobs=n_jobs, scoring = 'neg_mean_squared_error', verbose=2)
+
+for i in col:
+    gs_lasso.fit(x_train_std, y_train[i])
+    n = gs_lasso.best_params_
+    alpha_lasso[i] = [n['alpha']]
+alpha_lasso
+pred_lasso = pd.DataFrame()
+ISpred_lasso = pd.DataFrame()
+
+for i in col:
+    lasso_best = Lasso(alpha=float(alpha_lasso[i]))
+    lasso_best.fit(x_train_std, y_train[i])
+    pred_lasso[i] = lasso_best.predict(x_test_std)
+    ISpred_lasso[i] = lasso_best.predict(x_train_std)
+pred_lasso   
+print('Lasso Mean Squared Error (MSE out sample) :', metrics.mean_squared_error(y_test, pred_lasso))
+print('Lasso Mean Squared Error (MSE in sample) :', metrics.mean_squared_error(y_train, ISpred_lasso))
+# xgboost
+depth_xgb = pd.DataFrame()
+xgboost = xgb.XGBRegressor()
+params_xgb = {'max_depth' : [3,4,5,6,7,8,9,10]}
+tscv = TimeSeriesSplit(n_splits=5)
+gs_xgb = GridSearchCV(xgboost, params_xgb, cv=tscv)
+
+for i in col:
+    gs_xgb.fit(x_train_std, y_train[i])
+    n = gs_xgb.best_params_
+    depth_xgb[i] = [n['max_depth']]
+depth_xgb
+pred_xgb = pd.DataFrame()
+ISpred_xgb = pd.DataFrame()
+for i in col:
+    xgb_best = xgb.XGBRegressor(max_depth=int(depth_xgb[i]))
+    xgb_best.fit(x_train_std, y_train[i])
+    pred_xgb[i] = xgb_best.predict(x_test_std)
+    ISpred_xgb[i] = xgb_best.predict(x_train_std)
+
+
+
+print('xgb Mean Squared Error (MSE out sample) :', metrics.mean_squared_error(y_test, pred_xgb))
+print('xgb Mean Squared Error (MSE in sample) :', metrics.mean_squared_error(y_train, ISpred_xgb))
+#ols
+#rank estimated returns
+rank_ols = pred_ols.rank(axis=1)#higher the rank higher the return 
+rank_ols = rank_ols.astype(int)
+port_ols = rank_ols.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_ols.loc[(rank_ols[i] > 5.9),i]=1 
+    port_ols.loc[(rank_ols[i] < 3.1),i]=-1 
+    port_ols.loc[(rank_ols[i] == 4),i]=0 
+    port_ols.loc[(rank_ols[i] == 5),i]=0 
+ret_ols=[]
+simplerel_ols = []
+turnover_ols=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_test['consumer_discretionary'])):
+    ret_ols.append(port_ols.loc[i,:].dot(y_test.loc[i+2846,:])/6)
+    simplerel_ols.append(port_ols.loc[i,:].dot(y_test_simple.loc[i+2846,:])/6)
+for i in range(1,len(y_test['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_ols.append(abs(sum(port_ols.loc[i,:])-port_ols.loc[i-1,:].dot(y_test_simple.loc[i+2846,:]+1)))
+turnover_ols=pd.DataFrame(turnover_ols)
+average=turnover_ols.groupby(turnover_ols.index // 30).sum()
+Avgturnover_ols = average.mean()
+port_ols['Return'] = ret_ols
+port_ols['Simple Return'] =simplerel_ols
+cumsimplereturn = 100*np.cumprod(1+port_ols['Simple Return']) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_ols)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_ols))
+Aret_ols = TotalReturn**(365/len(simplerel_ols))#log
+print('Annualised simple return for ' + 'OLS' +' is ' + str(Aret_ols))
+#OLS IS
+#rank estimated returns
+rank_ols = ISpred_ols.rank(axis=1)#higher the rank higher the return 
+rank_ols = rank_ols.astype(int)
+port_ols = rank_ols.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_ols.loc[(rank_ols[i] > 5.9),i]=1 
+    port_ols.loc[(rank_ols[i] < 3.1),i]=-1 
+    port_ols.loc[(rank_ols[i] == 4),i]=0 
+    port_ols.loc[(rank_ols[i] == 5),i]=0 
+ret_ols=[]
+simplerel_ols = []
+turnover_ols=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_train['consumer_discretionary'])):
+    ret_ols.append(port_ols.loc[i,:].dot(y_train.loc[i,:])/6)
+    simplerel_ols.append(port_ols.loc[i,:].dot(y_train_simple.loc[i,:])/6)
+for i in range(1,len(y_train['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_ols.append(abs(sum(port_ols.loc[i,:])-port_ols.loc[i-1,:].dot(y_train_simple.loc[i,:]+1)))
+turnover_ols=pd.DataFrame(turnover_ols)
+average=turnover_ols.groupby(turnover_ols.index // 30).sum()
+Avgturnover_ols = average.mean()
+port_ols['ISReturn'] = ret_ols
+port_ols['ISSimple Return'] =simplerel_ols
+cumsimplereturn = 100*np.cumprod(1+port_ols['ISSimple Return']) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_ols)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_ols))
+Aret_ols = TotalReturn**(365/len(simplerel_ols))#log
+print('Annualised in sample simple return for ' + 'OLS' +' is ' + str(Aret_ols))
+
+#ridge
+#rank estimated returns
+rank_ridge = pred_ridge.rank(axis=1)#higher the rank higher the return 
+rank_ridge = rank_ridge.astype(int)
+port_ridge = rank_ridge.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_ridge.loc[(rank_ridge[i] > 5.9),i]=1 
+    port_ridge.loc[(rank_ridge[i] < 3.1),i]=-1 
+    port_ridge.loc[(rank_ridge[i] == 4),i]=0 
+    port_ridge.loc[(rank_ridge[i] == 5),i]=0 
+ret_ridge=[]
+turnover_ridge=[]
+simplerel_ridge=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_test['consumer_discretionary'])):
+    ret_ridge.append(port_ridge.loc[i,:].dot(y_test.loc[i+2846,:])/6)
+    simplerel_ridge.append(port_ridge.loc[i,:].dot(y_test_simple.loc[i+2846,:])/6)
+
+for i in range(1,len(y_test['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_ridge.append(abs(sum(port_ridge.loc[i,:])-port_ridge.loc[i-1,:].dot(y_test_simple.loc[i+2846,:]+1)))
+turnover_ridge=pd.DataFrame(turnover_ridge)
+average=turnover_ridge.groupby(turnover_ridge.index // 30).sum()
+Avgturnover_ridge = average.mean()
+
+port_ridge['Return'] = ret_ridge
+
+port_ridge['Simple Return'] =simplerel_ridge
+cumsimplereturn = 100*np.cumprod(1+port_ridge['Simple Return']) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_ridge)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_ridge))
+Aret_ridge = TotalReturn**(365/len(simplerel_ridge))#log
+print('Annualised simple return for ' + 'ridge ' +' is ' + str(Aret_ridge))
+#ridge
+#rank estimated returns
+rank_ridge = ISpred_ridge.rank(axis=1)#higher the rank higher the return 
+rank_ridge = rank_ridge.astype(int)
+port_ridge = rank_ridge.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_ridge.loc[(rank_ridge[i] > 5.9),i]=1 
+    port_ridge.loc[(rank_ridge[i] < 3.1),i]=-1 
+    port_ridge.loc[(rank_ridge[i] == 4),i]=0 
+    port_ridge.loc[(rank_ridge[i] == 5),i]=0 
+ret_ridge=[]
+turnover_ridge=[]
+simplerel_ridge=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_train['consumer_discretionary'])):
+    ret_ridge.append(port_ridge.loc[i,:].dot(y_train.loc[i,:])/6)
+    simplerel_ridge.append(port_ridge.loc[i,:].dot(y_train_simple.loc[i,:])/6)
+
+for i in range(1,len(y_train['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_ridge.append(abs(sum(port_ridge.loc[i,:])-port_ridge.loc[i-1,:].dot(y_train_simple.loc[i,:]+1)))
+turnover_ridge=pd.DataFrame(turnover_ridge)
+average=turnover_ridge.groupby(turnover_ridge.index // 30).sum()
+Avgturnover_ridge = average.mean()
+
+port_ridge['ISReturn'] = ret_ridge
+
+port_ridge['ISSimple Return'] =simplerel_ridge
+cumsimplereturn = 100*np.cumprod(1+port_ridge['ISSimple Return']) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_ridge)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_ridge))
+Aret_ridge = TotalReturn**(365/len(simplerel_ridge))#log
+print('Annualised in sample simple return for ' + 'ridge ' +' is ' + str(Aret_ridge))
+#lasso
+#rank estimated returns
+rank_lasso = pred_lasso.rank(axis=1)#higher the rank higher the return 
+rank_lasso = rank_lasso.astype(int)
+port_lasso_1 = rank_lasso.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_lasso_1.loc[(rank_lasso[i] > 5.9),i]=1 
+    port_lasso_1.loc[(rank_lasso[i] < 3.1),i]=-1 
+    port_lasso_1.loc[(rank_lasso[i] == 4),i]=0 
+    port_lasso_1.loc[(rank_lasso[i] == 5),i]=0 
+ret_lasso=[]
+turnover_lasso=[]
+simplerel_lasso=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_test['consumer_discretionary'])):
+    ret_lasso.append(port_lasso_1.loc[i,:].dot(y_test.loc[i+2846,:])/6)
+    simplerel_lasso.append(port_lasso_1.loc[i,:].dot(y_test_simple.loc[i+2846,:])/6)
+
+for i in range(1,len(y_test['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_lasso.append(abs(sum(port_lasso_1.loc[i,:])-port_lasso_1.loc[i-1,:].dot(y_test_simple.loc[i+2846,:]+1)))
+turnover_lasso=pd.DataFrame(turnover_lasso)
+average=turnover_lasso.groupby(turnover_lasso.index // 30).sum()
+Avgturnover_lasso = average.mean()
+
+port_lasso_1['Return'] = ret_lasso
+port_lasso_1
+
+port_lasso_1['Simple Return'] =simplerel_lasso
+cumsimplereturn = 100*np.cumprod(1+port_lasso_1['Simple Return']) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_lasso)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_lasso))
+Aret_lasso = TotalReturn**(365/len(simplerel_lasso))#log
+print('Annualised simple return for ' + 'lasso' +' is ' + str(Aret_lasso))
+#lasso IS
+#rank estimated returns
+rank_lasso = ISpred_lasso .rank(axis=1)#higher the rank higher the return 
+rank_lasso = rank_lasso.astype(int)
+port_lasso = rank_lasso.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_lasso.loc[(rank_lasso[i] > 5.9),i]=1 
+    port_lasso.loc[(rank_lasso[i] < 3.1),i]=-1 
+    port_lasso.loc[(rank_lasso[i] == 4),i]=0 
+    port_lasso.loc[(rank_lasso[i] == 5),i]=0 
+ret_lasso=[]
+turnover_lasso=[]
+simplerel_lasso=[]
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_train['consumer_discretionary'])):
+    ret_lasso.append(port_lasso.loc[i,:].dot(y_train.loc[i,:])/6)
+    simplerel_lasso.append(port_lasso.loc[i,:].dot(y_train_simple.loc[i,:])/6)
+
+for i in range(1,len(y_train['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_lasso.append(abs(sum(port_lasso.loc[i,:])-port_lasso.loc[i-1,:].dot(y_train_simple.loc[i,:]+1)))
+turnover_lasso=pd.DataFrame(turnover_lasso)
+average=turnover_lasso.groupby(turnover_lasso.index // 30).sum()
+Avgturnover_lasso = average.mean()
+
+port_lasso['ISReturn'] = ret_lasso
+port_lasso
+
+port_lasso['ISSimple Return'] =simplerel_lasso
+cumsimplereturn = 100*np.cumprod(1+port_lasso['ISSimple Return'] ) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_lasso)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_lasso))
+Aret_lasso = TotalReturn**(365/len(simplerel_lasso))#log
+print('Annualised in sample simple return for ' + 'lasso' +' is ' + str(Aret_lasso))
+# Lasso Sharpe ratio - in and out of sample
+in_sample_sharpe = np.round((np.mean(port_lasso['ISReturn'])/np.std(port_lasso['ISReturn']))*(252**(1/2),3))
+out_sample_sharpe = np.round((np.mean(port_lasso_1['Return'])/ np.std(port_lasso_1['Return'])),3))
+print('The in-sample Sharpe ratio is:',in_sample_sharpe,'\n','The out-sample Sharpe ratio is:',out_sample_sharpe)
+#xgb
+#rank estimated returns
+rank_xgb = pred_xgb .rank(axis=1)#higher the rank higher the return 
+rank_xgb = rank_xgb.astype(int)
+port_xgb = rank_xgb.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_xgb.loc[(rank_xgb[i] > 5.9),i]=1 
+    port_xgb.loc[(rank_xgb[i] < 3.1),i]=-1 
+    port_xgb.loc[(rank_xgb[i] == 4),i]=0 
+    port_xgb.loc[(rank_xgb[i] == 5),i]=0 
+ret_xgb=[]
+turnover_xgb=[]
+simplerel_xgb=[]
+
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_test['consumer_discretionary'])):
+    ret_xgb.append(port_xgb.loc[i,:].dot(y_test.loc[i+2846,:])/6)
+    simplerel_xgb.append(port_xgb.loc[i,:].dot(y_test_simple.loc[i+2846,:])/6)
+
+for i in range(1,len(y_test['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_xgb.append(abs(sum(port_xgb.loc[i,:])-port_xgb.loc[i-1,:].dot(y_test_simple.loc[i+2846,:]+1)))
+    
+ 
+port_xgb['ISReturn'] = ret_xgb
+
+
+port_xgb['ISSimple Return'] =simplerel_xgb
+cumsimplereturn = 100*np.cumprod(1+port_xgb['ISSimple Return'] ) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_xgb)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_xgb))
+Aret_xgb = TotalReturn**(365/len(simplerel_xgb))#log
+print('Annualised simple return for ' + 'xgb ' +' is ' + str(Aret_xgb))
+
+
+turnover_xgb=pd.DataFrame(turnover_xgb)
+average=turnover_xgb.groupby(turnover_xgb.index // 30).sum()
+Avgturnover_xgb = average.mean()
+port_xgb['Return'] = ret_xgb
+
+#xgb IS
+#rank estimated returns
+rank_xgb = ISpred_xgb .rank(axis=1)#higher the rank higher the return 
+rank_xgb = rank_xgb.astype(int)
+port_xgb = rank_xgb.copy()
+#set weight for each according to rank
+for i in list(col):
+    port_xgb.loc[(rank_xgb[i] > 5.9),i]=1 
+    port_xgb.loc[(rank_xgb[i] < 3.1),i]=-1 
+    port_xgb.loc[(rank_xgb[i] == 4),i]=0 
+    port_xgb.loc[(rank_xgb[i] == 5),i]=0 
+ret_xgb=[]
+turnover_xgb=[]
+simplerel_xgb=[]
+
+#calculate portfiolo return by summing weight*return for each etf and /6 
+for i in range(0,len(y_train['consumer_discretionary'])):
+    ret_xgb.append(port_xgb.loc[i,:].dot(y_train.loc[i,:])/6)
+    simplerel_xgb.append(port_xgb.loc[i,:].dot(y_train_simple.loc[i,:])/6)
+
+for i in range(1,len(y_train['consumer_discretionary'])):    #use simple return for turnover 
+    #y_test_simple.loc[i+2846,:]
+    turnover_xgb.append(abs(sum(port_xgb.loc[i,:])-port_xgb.loc[i-1,:].dot(y_train_simple.loc[i,:]+1)))
+    
+ 
+port_xgb['ISReturn'] = ret_xgb
+
+
+port_xgb['ISSimple Return'] =simplerel_xgb
+cumsimplereturn = 100*np.cumprod(1+port_xgb['ISSimple Return'] ) #using cumprod() to obtain cumulative simple return series
+
+TotalReturn = cumsimplereturn[len(simplerel_xgb)-1]/(1+cumsimplereturn.iloc[0])
+print(TotalReturn)
+print(365/len(simplerel_xgb))
+Aret_xgb = TotalReturn**(365/len(simplerel_xgb))#log
+print('Annualised in sample simple return for ' + 'xgb ' +' is ' + str(Aret_xgb))
+
+
+turnover_xgb=pd.DataFrame(turnover_xgb)
+average=turnover_xgb.groupby(turnover_xgb.index // 30).sum()
+Avgturnover_xgb = average.mean()
+port_xgb['Return'] = ret_xgb
+
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import numpy as np
+
+compRet = pd.DataFrame({'OLS': 100*np.cumsum(ret_ols)+100 , 'Ridge': 100*np.cumsum(ret_ridge)+100 ,
+                        'Lasso':  100*np.cumsum(ret_lasso)+100 , 'XGB': 100*np.cumsum(ret_xgb)+100 })
+compRet.plot()
+plt.legend(loc='upper left')
+plt.xlabel("Date")
+plt.ylabel("Cummulative Log Return")
+plt.title('Four Forcasting Methods')
+plt.show()
+
+Avgturnover_xgb
+Avgturnover_lasso
+Avgturnover_ols
+Avgturnover_ridge
